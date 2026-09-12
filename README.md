@@ -19,7 +19,7 @@
 
 核心接口：
 
-run_mutation(items)
+run_mutation(items, model_config=None)
 
 支持单条 dict 和批量 list 输入。
 
