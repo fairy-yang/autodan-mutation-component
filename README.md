@@ -165,3 +165,64 @@ add_reviewed_strategy(
 - Python 平台调用接口：完成
 
 本模块不重新执行 AutoDAN-Turbo 的 warm-up、lifelong strategy learning 和完整论文实验流程，而是加载已有 Strategy Library 完成在线文本变异。
+
+
+## 第二版：持续学习策略框架
+
+第二版分支 `codex/lifelong-strategy-loop` 增加了论文核心方法中的策略库持续更新框架：
+
+```text
+input.jsonl
+  -> StrategyRetriever
+  -> Attacker.use_strategy()
+  -> structured output
+  -> feedback log
+  -> StrategyLibrary statistics/update
+  -> next round retrieval
+```
+
+新增文件：
+
+- `lifelong_strategy.py`：策略库状态、反馈日志、策略统计、更新库导出。
+- `lifelong_runner.py`：多轮 `rounds × attempts_per_item` 批量变异入口。
+
+Python 调用示例：
+
+```python
+from lifelong_runner import run_lifelong_mutation
+
+outputs = run_lifelong_mutation(
+    items,
+    rounds=3,
+    attempts_per_item=5,
+    model_config={
+        "feedback_log_path": "runs/feedback_logs.jsonl",
+        "learned_strategy_library_path": "runs/learned_strategy_library.json",
+        "updated_strategy_library_path": "runs/strategy_library_updated.json",
+        "max_context_tokens": 8192,
+    },
+)
+```
+
+JSONL 调用示例：
+
+```python
+from lifelong_runner import run_lifelong_mutation_jsonl
+
+run_lifelong_mutation_jsonl(
+    input_path="input.jsonl",
+    output_path="mutated_output_lifelong.jsonl",
+    rounds=3,
+    attempts_per_item=5,
+)
+```
+
+输出字段新增：
+
+- `round`
+- `attempt`
+- `strategy_id`
+- `strategy_source`
+- `generation`
+
+说明：本实现保留论文中的策略库持续更新工程结构，但反馈分数由外部评测或人工审核传入；不会自动调用目标模型来优化攻击成功率。
