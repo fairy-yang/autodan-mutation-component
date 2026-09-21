@@ -37,20 +37,83 @@ class HuggingFaceModel:
         chat_template = open(f'{config_dir}/{self.config["chat_template"]}').read()
         chat_template = chat_template.replace('    ', '').replace('\n', '')
         self.tokenizer.chat_template = chat_template
+        self.last_generation_stats = {}
         print("Model loaded with automatic device mapping across GPUs.")
+
+    def _context_window(self):
+        for value in (
+            getattr(self.model.config, "max_position_embeddings", None),
+            getattr(self.tokenizer, "model_max_length", None),
+        ):
+            if isinstance(value, int) and 0 < value < 10**7:
+                return value
+        return None
+
+    @staticmethod
+    def _truncate_token_ids(input_ids, budget: int, strategy: str):
+        if input_ids.shape[-1] <= budget:
+            return input_ids
+
+        if strategy == "head":
+            return input_ids[..., :budget]
+        if strategy == "tail":
+            return input_ids[..., -budget:]
+
+        head = budget // 2
+        tail = budget - head
+        return torch.cat([input_ids[..., :head], input_ids[..., -tail:]], dim=-1)
+
+    def _prepare_inputs(
+        self,
+        plain_text: str,
+        max_new_tokens: int,
+        max_context_tokens: int = None,
+        allow_input_truncation: bool = True,
+        truncation_strategy: str = "middle",
+    ):
+        inputs = self.tokenizer(plain_text, return_tensors="pt")
+        input_tokens = int(inputs["input_ids"].shape[-1])
+
+        context_window = max_context_tokens or self._context_window()
+        prompt_budget = None
+        truncated = False
+
+        if context_window:
+            prompt_budget = max(int(context_window) - int(max_new_tokens), 1)
+            if input_tokens > prompt_budget:
+                if not allow_input_truncation:
+                    raise ValueError(
+                        "Input prompt is too long for the configured context window: "
+                        f"{input_tokens} prompt tokens > {prompt_budget} budget tokens "
+                        f"(context={context_window}, max_new_tokens={max_new_tokens})."
+                    )
+                inputs["input_ids"] = self._truncate_token_ids(
+                    inputs["input_ids"],
+                    prompt_budget,
+                    truncation_strategy,
+                )
+                inputs["attention_mask"] = self._truncate_token_ids(
+                    inputs["attention_mask"],
+                    prompt_budget,
+                    truncation_strategy,
+                )
+                truncated = True
+
+        self.last_generation_stats = {
+            "input_tokens": input_tokens,
+            "used_input_tokens": int(inputs["input_ids"].shape[-1]),
+            "max_new_tokens": int(max_new_tokens),
+            "context_window": context_window,
+            "prompt_budget": prompt_budget,
+            "truncated": truncated,
+            "truncation_strategy": truncation_strategy if truncated else None,
+        }
+
+        return {k: v.to(self.model.device) for k, v in inputs.items()}
 
     def generate(self, system: str, user: str, max_length: int = 1000, **kwargs):
         """
         Generate a response based on the input text.
-
-        Args:
-            system (str): System message for the model.
-            user (str): User message for the model.
-            max_length (int): Maximum length of the generated response.
-            **kwargs: Additional optional parameters such as temperature, top_k, top_p.
-
-        Returns:
-            str: The generated response from the model.
         """
         messages = [
             {'role': 'system', 'content': f'{system}'},
@@ -58,14 +121,21 @@ class HuggingFaceModel:
         ]
         plain_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-        # Model and tokenizer will handle device placement automatically
-        inputs = self.tokenizer(plain_text, return_tensors="pt")
-        # Move inputs to the correct device based on their device_map
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        max_new_tokens = kwargs.pop("max_new_tokens", None)
+        if max_new_tokens is None:
+            max_new_tokens = max(max_length - 1, 1)
+
+        inputs = self._prepare_inputs(
+            plain_text,
+            max_new_tokens=max_new_tokens,
+            max_context_tokens=kwargs.pop("max_context_tokens", None),
+            allow_input_truncation=kwargs.pop("allow_input_truncation", True),
+            truncation_strategy=kwargs.pop("truncation_strategy", "middle"),
+        )
 
         outputs = self.model.generate(
             **inputs,
-            max_length=max_length,
+            max_new_tokens=max_new_tokens,
             pad_token_id=self.tokenizer.eos_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
             **kwargs,
@@ -78,17 +148,6 @@ class HuggingFaceModel:
     def continue_generate(self, system: str, user1: str, assistant1: str, user2: str, max_length: int = 1000, **kwargs):
         """
         Continue a conversation and generate a response.
-
-        Args:
-            system (str): System message for the model.
-            user1 (str): User message for the model.
-            assistant1 (str): Assistant message for the model.
-            user2 (str): User message for the model.
-            max_length (int): Maximum length of the generated response.
-            **kwargs: Additional optional parameters such as temperature, top_k, top_p.
-
-        Returns:
-            str: The generated response from the model.
         """
         messages = [
             {'role': 'system', 'content': f'{system}'},
@@ -98,12 +157,21 @@ class HuggingFaceModel:
         ]
         plain_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-        inputs = self.tokenizer(plain_text, return_tensors="pt")
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        max_new_tokens = kwargs.pop("max_new_tokens", None)
+        if max_new_tokens is None:
+            max_new_tokens = max(max_length - 1, 1)
+
+        inputs = self._prepare_inputs(
+            plain_text,
+            max_new_tokens=max_new_tokens,
+            max_context_tokens=kwargs.pop("max_context_tokens", None),
+            allow_input_truncation=kwargs.pop("allow_input_truncation", True),
+            truncation_strategy=kwargs.pop("truncation_strategy", "middle"),
+        )
 
         outputs = self.model.generate(
             **inputs,
-            max_length=max_length,
+            max_new_tokens=max_new_tokens,
             pad_token_id=self.tokenizer.eos_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
             **kwargs,
@@ -116,16 +184,6 @@ class HuggingFaceModel:
     def conditional_generate(self, condition: str, system: str, user: str, max_length: int = 1000, **kwargs):
         """
         Generate a response with additional conditions appended to the input prompt.
-
-        Args:
-            condition (str): Condition for the generation (appended to the prompt).
-            system (str): System message for the model.
-            user (str): User message for the model.
-            max_length (int): Maximum length of the generated response.
-            **kwargs: Additional optional parameters such as temperature, top_k, top_p.
-
-        Returns:
-            str: The generated response from the model.
         """
         messages = [
             {'role': 'system', 'content': f'{system}'},
@@ -134,12 +192,18 @@ class HuggingFaceModel:
         plain_text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         plain_text += condition
 
-        inputs = self.tokenizer(plain_text, return_tensors="pt")
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        max_new_tokens = kwargs.pop("max_new_tokens", 512)
+        inputs = self._prepare_inputs(
+            plain_text,
+            max_new_tokens=max_new_tokens,
+            max_context_tokens=kwargs.pop("max_context_tokens", None),
+            allow_input_truncation=kwargs.pop("allow_input_truncation", True),
+            truncation_strategy=kwargs.pop("truncation_strategy", "middle"),
+        )
 
         outputs = self.model.generate(
             **inputs,
-            max_new_tokens=kwargs.pop("max_new_tokens", 512),
+            max_new_tokens=max_new_tokens,
             pad_token_id=self.tokenizer.eos_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
             **kwargs,
