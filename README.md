@@ -120,6 +120,39 @@ Qwen/Qwen2.5-1.5B-Instruct
 
 模型权重不随代码仓库提交。
 
+## 策略反馈与更新接口
+
+本分支新增了可审计的策略反馈接口，用于记录平台评测后的通用反馈，并允许追加人工审核后的策略说明：
+
+```python
+from autodan_mutation_service import (
+    add_reviewed_strategy,
+    get_strategy_feedback_report,
+    record_strategy_feedback,
+)
+
+record_strategy_feedback(
+    strategy="Strategy Name",
+    score=0.8,
+    outcome="valid_mutation",
+    notes="生成字段完整，长文本预算正常。",
+    metadata={"batch_id": "demo"},
+    model_config={"feedback_store_path": "runs/strategy_feedback.jsonl"},
+)
+
+report = get_strategy_feedback_report(
+    model_config={"feedback_store_path": "runs/strategy_feedback.jsonl"}
+)
+
+add_reviewed_strategy(
+    strategy_name="Reviewed Strategy Name",
+    definition="人工审核后的策略说明。",
+    example="可选示例。",
+)
+```
+
+这部分对应论文方法里的 Library 更新位置，但当前实现采用人工审核和通用质量反馈，不自动根据目标模型响应生成新的攻击策略。
+
 ## 当前完成情况
 
 - AutoDAN-Turbo 原始 Attacker 方法复用：完成
@@ -128,6 +161,7 @@ Qwen/Qwen2.5-1.5B-Instruct
 - 批量文本生成：完成
 - 结构化输入输出：完成
 - 长文本上下文预算与截断信息返回：完成
+- 策略反馈记录与人工审核追加接口：完成
 - Python 平台调用接口：完成
 
 本模块不重新执行 AutoDAN-Turbo 的 warm-up、lifelong strategy learning 和完整论文实验流程，而是加载已有 Strategy Library 完成在线文本变异。
