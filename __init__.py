@@ -5,6 +5,8 @@ from .autodan_mutation_service import (
     get_strategy_feedback_report,
     record_strategy_feedback,
     run_mutation,
+    run_lifelong_mutation,
+    run_lifelong_mutation_jsonl,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "get_strategy_feedback_report",
     "record_strategy_feedback",
     "run_mutation",
+    "run_lifelong_mutation",
+    "run_lifelong_mutation_jsonl",
 ]
