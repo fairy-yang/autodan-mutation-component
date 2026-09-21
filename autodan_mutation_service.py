@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Union
 
 from llm.huggingface_models import HuggingFaceModel
 from framework.attacker import Attacker
+from strategy_feedback import StrategyFeedbackStore, append_reviewed_strategy
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,6 +51,7 @@ class AutoDANMutationService:
         max_context_tokens: int = None,
         allow_input_truncation: bool = True,
         truncation_strategy: str = "middle",
+        feedback_store_path: str = None,
     ):
         self.model_name = model_name
         self.config_dir = config_dir
@@ -61,6 +63,8 @@ class AutoDANMutationService:
         self.max_context_tokens = max_context_tokens
         self.allow_input_truncation = allow_input_truncation
         self.truncation_strategy = truncation_strategy
+        self.feedback_store_path = feedback_store_path
+        self.feedback_store = StrategyFeedbackStore(feedback_store_path)
 
         self.strategies = self._load_strategies(strategy_library_path)
 
@@ -132,6 +136,42 @@ class AutoDANMutationService:
             "generation": generation_stats,
         }
 
+    def record_feedback(
+        self,
+        strategy: str,
+        score: float = None,
+        outcome: str = None,
+        notes: str = None,
+        metadata: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        return self.feedback_store.record(
+            strategy=strategy,
+            score=score,
+            outcome=outcome,
+            notes=notes,
+            metadata=metadata,
+        )
+
+    def feedback_report(self) -> Dict[str, Any]:
+        return self.feedback_store.report()
+
+    def add_reviewed_strategy(
+        self,
+        strategy_name: str,
+        definition: str,
+        example: str = "",
+        metadata: Dict[str, Any] = None,
+    ) -> str:
+        key = append_reviewed_strategy(
+            strategy_library_path=self.strategy_library_path,
+            strategy_name=strategy_name,
+            definition=definition,
+            example=example,
+            metadata=metadata,
+        )
+        self.strategies = self._load_strategies(self.strategy_library_path)
+        return key
+
     def mutate(
         self,
         items: Union[Dict[str, Any], List[Dict[str, Any]]]
@@ -163,7 +203,8 @@ def get_service(
         "max_new_tokens": 512,
         "max_context_tokens": 8192,
         "allow_input_truncation": true,
-        "truncation_strategy": "middle"
+        "truncation_strategy": "middle",
+        "feedback_store_path": "runs/strategy_feedback.jsonl"
     }
     """
     model_config = model_config or {}
@@ -181,6 +222,7 @@ def get_service(
     max_context_tokens = model_config.get("max_context_tokens")
     allow_input_truncation = model_config.get("allow_input_truncation", True)
     truncation_strategy = model_config.get("truncation_strategy", "middle")
+    feedback_store_path = model_config.get("feedback_store_path")
 
     service_key = (
         model_name,
@@ -193,6 +235,7 @@ def get_service(
         max_context_tokens,
         allow_input_truncation,
         truncation_strategy,
+        feedback_store_path,
     )
 
     if service_key not in _services:
@@ -207,6 +250,7 @@ def get_service(
             max_context_tokens=max_context_tokens,
             allow_input_truncation=allow_input_truncation,
             truncation_strategy=truncation_strategy,
+            feedback_store_path=feedback_store_path,
         )
 
     return _services[service_key]
@@ -218,3 +262,44 @@ def run_mutation(
 ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
     service = get_service(model_config)
     return service.mutate(items)
+
+
+def record_strategy_feedback(
+    strategy: str,
+    score: float = None,
+    outcome: str = None,
+    notes: str = None,
+    metadata: Dict[str, Any] = None,
+    model_config: Dict[str, Any] = None,
+) -> Dict[str, Any]:
+    service = get_service(model_config)
+    return service.record_feedback(
+        strategy=strategy,
+        score=score,
+        outcome=outcome,
+        notes=notes,
+        metadata=metadata,
+    )
+
+
+def get_strategy_feedback_report(
+    model_config: Dict[str, Any] = None,
+) -> Dict[str, Any]:
+    service = get_service(model_config)
+    return service.feedback_report()
+
+
+def add_reviewed_strategy(
+    strategy_name: str,
+    definition: str,
+    example: str = "",
+    metadata: Dict[str, Any] = None,
+    model_config: Dict[str, Any] = None,
+) -> str:
+    service = get_service(model_config)
+    return service.add_reviewed_strategy(
+        strategy_name=strategy_name,
+        definition=definition,
+        example=example,
+        metadata=metadata,
+    )
