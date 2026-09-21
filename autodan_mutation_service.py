@@ -303,3 +303,9 @@ def add_reviewed_strategy(
         example=example,
         metadata=metadata,
     )
+
+try:
+    from lifelong_runner import run_lifelong_mutation, run_lifelong_mutation_jsonl
+except ImportError:
+    run_lifelong_mutation = None
+    run_lifelong_mutation_jsonl = None
